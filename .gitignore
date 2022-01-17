@@ -172,6 +172,7 @@ dmypy.json
 
 ### Python Patch ###
 .venv/
+.idea/
 
 ### Python.VirtualEnv Stack ###
 # Virtualenv
@@ -209,3 +210,4 @@ $RECYCLE.BIN/
 
 # Windows shortcuts
 *.lnk
+.idea/*
