@@ -157,7 +157,7 @@ class LmdbDataset(Dataset):
                 see https://github.com/clovaai/deep-text-recognition-benchmark/blob/dff844874dbe9e0ec8c5a52a7bd08c7f20afe704/test.py#L137-L144
                 """
                 self.filtered_index_list = []
-                for index in range(min(self.nSamples, 1000)):
+                for index in range(self.nSamples):
                     index += 1  # lmdb starts with 1
                     label_key = 'label-%09d'.encode() % index
                     label = txn.get(label_key).decode('utf-8')
