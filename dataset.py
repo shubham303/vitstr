@@ -6,16 +6,6 @@ import math
 import lmdb
 import torch
 
-from augmentation.weather import Fog, Snow, Frost
-from augmentation.warp import Curve, Distort, Stretch
-from augmentation.geometry import Rotate, Perspective, Shrink, TranslateX, TranslateY
-from augmentation.pattern import VGrid, HGrid, Grid, RectGrid, EllipseGrid
-from augmentation.noise import GaussianNoise, ShotNoise, ImpulseNoise, SpeckleNoise
-from augmentation.blur import GaussianBlur, DefocusBlur, MotionBlur, GlassBlur, ZoomBlur
-from augmentation.camera import Contrast, Brightness, JpegCompression, Pixelate
-from augmentation.weather import Fog, Snow, Frost, Rain, Shadow
-from augmentation.process import Posterize, Solarize, Invert, Equalize, AutoContrast, Sharpness, Color
-
 from natsort import natsorted
 from PIL import Image
 import PIL.ImageOps
@@ -167,7 +157,7 @@ class LmdbDataset(Dataset):
                 see https://github.com/clovaai/deep-text-recognition-benchmark/blob/dff844874dbe9e0ec8c5a52a7bd08c7f20afe704/test.py#L137-L144
                 """
                 self.filtered_index_list = []
-                for index in range(min(self.nSamples, 1000)):
+                for index in range(self.nSamples):
                     index += 1  # lmdb starts with 1
                     label_key = 'label-%09d'.encode() % index
                     label = txn.get(label_key).decode('utf-8')
@@ -268,159 +258,6 @@ class RawDataset(Dataset):
 def isless(prob=0.5):
     return np.random.uniform(0,1) < prob
 
-class DataAugment(object):
-    '''
-    Supports with and without data augmentation 
-    '''
-    def __init__(self, opt):
-        self.opt = opt
-
-        if not opt.eval:
-            self.process = [Posterize(), Solarize(), Invert(), Equalize(), AutoContrast(), Sharpness(), Color()]
-            self.camera = [Contrast(), Brightness(), JpegCompression(), Pixelate()]
-
-            self.pattern = [VGrid(), HGrid(), Grid(), RectGrid(), EllipseGrid()]
-
-            self.noise = [GaussianNoise(), ShotNoise(), ImpulseNoise(), SpeckleNoise()]
-            self.blur = [GaussianBlur(), DefocusBlur(), MotionBlur(), GlassBlur(), ZoomBlur()]
-            self.weather = [Fog(), Snow(), Frost(), Rain(), Shadow()]
-
-            self.noises = [self.blur, self.noise, self.weather]
-            self.processes = [self.camera, self.process]
-
-            self.warp = [Curve(), Distort(), Stretch()]
-            self.geometry = [Rotate(), Perspective(), Shrink()]
-
-            self.isbaseline_aug = False
-            # rand augment
-            if self.opt.isrand_aug:
-                self.augs = [self.process, self.camera, self.noise, self.blur, self.weather, self.pattern, self.warp, self.geometry]
-            # semantic augment
-            elif self.opt.issemantic_aug:
-                self.geometry = [Rotate(), Perspective(), Shrink()]
-                self.noise = [GaussianNoise()]
-                self.blur = [MotionBlur()]
-                self.augs = [self.noise, self.blur, self.geometry]
-                self.isbaseline_aug = True
-            # pp-ocr augment
-            elif self.opt.islearning_aug:
-                self.geometry = [Rotate(), Perspective()]
-                self.noise = [GaussianNoise()]
-                self.blur = [MotionBlur()]
-                self.warp = [Distort()]
-                self.augs = [self.warp, self.noise, self.blur, self.geometry]
-                self.isbaseline_aug = True
-            # scatter augment
-            elif self.opt.isscatter_aug:
-                self.geometry = [Shrink()]
-                self.warp = [Distort()]
-                self.augs = [self.warp, self.geometry]
-                self.baseline_aug = True
-            # rotation augment
-            elif self.opt.isrotation_aug:
-                self.geometry = [Rotate()]
-                self.augs = [self.geometry]
-                self.isbaseline_aug = True
-
-        self.scale = False if opt.Transformer else True
-
-    def __call__(self, img):
-        '''
-            Must call img.copy() if pattern, Rain or Shadow is used
-        '''
-        img = img.resize((self.opt.imgW, self.opt.imgH), Image.BICUBIC)
-
-        if self.opt.eval or isless(self.opt.intact_prob):
-            pass
-        elif self.opt.isrand_aug or self.isbaseline_aug:
-            img = self.rand_aug(img)
-        # individual augment can also be selected
-        elif self.opt.issel_aug:
-            img = self.sel_aug(img)
-
-        img = transforms.ToTensor()(img)
-        if self.scale:
-            img.sub_(0.5).div_(0.5)
-        return img
-
-
-    def rand_aug(self, img):
-        augs = np.random.choice(self.augs, self.opt.augs_num, replace=False)
-        for aug in augs:
-            index = np.random.randint(0, len(aug))
-            op = aug[index]
-            mag = np.random.randint(0, 3) if self.opt.augs_mag is None else self.opt.augs_mag
-            if type(op).__name__ == "Rain"  or type(op).__name__ == "Grid":
-                img = op(img.copy(), mag=mag)
-            else:
-                img = op(img, mag=mag)
-
-        return img
-
-    def sel_aug(self, img):
-
-        prob = 1.
-
-        if self.opt.process:
-            mag = np.random.randint(0, 3)
-            index = np.random.randint(0, len(self.process))
-            op = self.process[index]
-            img = op(img, mag=mag, prob=prob)
-
-        if self.opt.noise:
-            mag = np.random.randint(0, 3)
-            index = np.random.randint(0, len(self.noise))
-            op = self.noise[index]
-            img = op(img, mag=mag, prob=prob)
-
-        if self.opt.blur:
-            mag = np.random.randint(0, 3)
-            index = np.random.randint(0, len(self.blur))
-            op = self.blur[index]
-            img = op(img, mag=mag, prob=prob)
-
-        if self.opt.weather:
-            mag = np.random.randint(0, 3)
-            index = np.random.randint(0, len(self.weather))
-            op = self.weather[index]
-            if type(op).__name__ == "Rain": #or "Grid" in type(op).__name__ :
-                img = op(img.copy(), mag=mag, prob=prob)
-            else:
-                img = op(img, mag=mag, prob=prob)
-
-        if self.opt.camera:
-            mag = np.random.randint(0, 3)
-            index = np.random.randint(0, len(self.camera))
-            op = self.camera[index]
-            img = op(img, mag=mag, prob=prob)
-
-        if self.opt.pattern:
-            mag = np.random.randint(0, 3)
-            index = np.random.randint(0, len(self.pattern))
-            op = self.pattern[index]
-            img = op(img.copy(), mag=mag, prob=prob)
-
-        iscurve = False
-        if self.opt.warp:
-            mag = np.random.randint(0, 3)
-            index = np.random.randint(0, len(self.warp))
-            op = self.warp[index]
-            if type(op).__name__ == "Curve":
-                iscurve = True
-            img = op(img, mag=mag, prob=prob)
-
-        if self.opt.geometry:
-            mag = np.random.randint(0, 3)
-            index = np.random.randint(0, len(self.geometry))
-            op = self.geometry[index]
-            if type(op).__name__ == "Rotate":
-                img = op(img, iscurve=iscurve, mag=mag, prob=prob)
-            else:
-                img = op(img, mag=mag, prob=prob)
-
-        return img
-
-
 class ResizeNormalize(object):
 
     def __init__(self, size, interpolation=Image.BICUBIC):
@@ -487,8 +324,8 @@ class AlignCollate(object):
 
             image_tensors = torch.cat([t.unsqueeze(0) for t in resized_images], 0)
 
-        else:
-            transform = DataAugment(self.opt)
+        #else:
+            #transform = DataAugment(self.opt)
             #i = 0
             #for image in images:
             #    transform(image)
@@ -496,13 +333,13 @@ class AlignCollate(object):
             #        exit(0)
             #    else: 
             #        i = i + 1
+            #image_tensors = [transform(image) for image in images]
+            #image_tensors = torch.cat([t.unsqueeze(0) for t in image_tensors], 0)
+        
+        else:
+            transform = ResizeNormalize((self.imgW, self.imgH))
             image_tensors = [transform(image) for image in images]
             image_tensors = torch.cat([t.unsqueeze(0) for t in image_tensors], 0)
-        
-        #else:
-        #    transform = ResizeNormalize((self.imgW, self.imgH))
-        #    image_tensors = [transform(image) for image in images]
-        #    image_tensors = torch.cat([t.unsqueeze(0) for t in image_tensors], 0)
 
         return image_tensors, labels
 
